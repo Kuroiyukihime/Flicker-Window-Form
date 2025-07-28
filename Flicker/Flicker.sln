@@ -1,0 +1,25 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34728.123
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Flicker", "Flicker\Flicker.csproj", "{536B4821-31CE-4692-A67D-24B922923813}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{536B4821-31CE-4692-A67D-24B922923813}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{536B4821-31CE-4692-A67D-24B922923813}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{536B4821-31CE-4692-A67D-24B922923813}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{536B4821-31CE-4692-A67D-24B922923813}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5C4123B5-BB10-48B1-B384-8A5D13718560}
+	EndGlobalSection
+EndGlobal
