@@ -18,7 +18,6 @@ namespace Flicker
         private readonly object bitmapLock = new object();
         private int flickerCount = 0; // Counter for flickering
         private const int BLOCK_SIZE = 3; // 3x3 pixel blocks
-        private bool globalFlickerState = false; // Global state to ensure alternation
 
         public Form1()
         {
@@ -143,15 +142,15 @@ namespace Flicker
                 using Font font = new("Arial", 72, FontStyle.Bold);
                 g.DrawString(text, font, Brushes.White, new PointF(20, tempBitmap.Height / 2 - 60));
                 
-                // Detect white pixels (the word we drew)
+                // Detect ALL white pixels (the word we drew)
                 List<Point> wordPixels = new List<Point>();
                 for (int x = 0; x < tempBitmap.Width; x++)
                 {
                     for (int y = 0; y < tempBitmap.Height; y++)
                     {
                         Color px = tempBitmap.GetPixel(x, y);
-                        // Look for white pixels (the word we drew)
-                        if (px.R > 200 && px.G > 200 && px.B > 200)
+                        // Look for white pixels (the word we drew) - more lenient detection
+                        if (px.R > 50 || px.G > 50 || px.B > 50)
                         {
                             wordPixels.Add(new Point(x, y));
                         }
@@ -160,26 +159,7 @@ namespace Flicker
 
                 System.Diagnostics.Debug.WriteLine($"Found {wordPixels.Count} word pixels");
 
-                // If no white pixels found, try more lenient detection
-                if (wordPixels.Count == 0)
-                {
-                    System.Diagnostics.Debug.WriteLine("No white pixels found, trying lenient detection...");
-                    for (int x = 0; x < tempBitmap.Width; x++)
-                    {
-                        for (int y = 0; y < tempBitmap.Height; y++)
-                        {
-                            Color px = tempBitmap.GetPixel(x, y);
-                            // More lenient detection: any pixel that's not black
-                            if (px.R > 50 || px.G > 50 || px.B > 50)
-                            {
-                                wordPixels.Add(new Point(x, y));
-                            }
-                        }
-                    }
-                    System.Diagnostics.Debug.WriteLine($"Found {wordPixels.Count} word pixels with lenient detection");
-                }
-
-                // Group pixels into 3x3 blocks
+                // Group pixels into 3x3 blocks - ensure we get ALL blocks that contain word pixels
                 Dictionary<Point, bool> wordBlocks = new Dictionary<Point, bool>();
                 
                 foreach (Point pixel in wordPixels)
@@ -190,8 +170,7 @@ namespace Flicker
 
                 System.Diagnostics.Debug.WriteLine($"Created {wordBlocks.Count} word blocks");
 
-                // Create flicker blocks for the word
-                bool useSyncRate = true;
+                // Create flicker blocks for ALL word blocks
                 foreach (Point block in wordBlocks.Keys)
                 {
                     flickerBlocks.Add(new FlickerBlock
@@ -200,11 +179,18 @@ namespace Flicker
                         Y = block.Y * BLOCK_SIZE,
                         BlockSize = BLOCK_SIZE,
                         IsTextBlock = true,
-                        IsSync = useSyncRate,
-                        Interval = useSyncRate ? 200 : 300 // Sync: 200ms, Async: 300ms
+                        Interval = rand.Next(50, 250) // Random interval for each block (2x faster)
                     });
-                    
-                    useSyncRate = !useSyncRate; // Alternate between sync and async
+                }
+                
+                // Debug: Show the range of blocks detected
+                if (wordBlocks.Count > 0)
+                {
+                    var minX = wordBlocks.Keys.Min(p => p.X);
+                    var maxX = wordBlocks.Keys.Max(p => p.X);
+                    var minY = wordBlocks.Keys.Min(p => p.Y);
+                    var maxY = wordBlocks.Keys.Max(p => p.Y);
+                    System.Diagnostics.Debug.WriteLine($"Word block range: X({minX}-{maxX}), Y({minY}-{maxY})");
                 }
                 
                 MessageBox.Show($"Found {wordPixels.Count} word pixels, created {flickerBlocks.Count} {BLOCK_SIZE}x{BLOCK_SIZE} blocks.\nTimer interval: {1000 / monitorRate}ms\nText: '{text}'");
@@ -283,13 +269,6 @@ namespace Flicker
                     // Use a counter to alternate colors
                     flickerCount++;
                     
-                    // Toggle global flicker state every few ticks to ensure alternation
-                    if (flickerCount % 5 == 0)
-                    {
-                        globalFlickerState = !globalFlickerState;
-                        System.Diagnostics.Debug.WriteLine($"Global flicker state changed to: {(globalFlickerState ? "White" : "Black")}");
-                    }
-                    
                     // Only flicker the text blocks, leave the background blocks alone
                     long currentTime = Environment.TickCount64;
                     int blocksUpdated = 0;
@@ -303,9 +282,9 @@ namespace Flicker
                             if (timeSinceLastFlicker >= block.Interval)
                             {
                                 // Use global flicker state to determine color
-                                Color newColor = globalFlickerState ? Color.White : Color.Black;
+                                Color newColor = rand.Next(2) == 0 ? Color.White : Color.Black;
                                 
-                                System.Diagnostics.Debug.WriteLine($"Block at ({block.X}, {block.Y}) flickering to {(globalFlickerState ? "White" : "Black")}, timeSinceLast: {timeSinceLastFlicker}ms, interval: {block.Interval}ms");
+                                System.Diagnostics.Debug.WriteLine($"Block at ({block.X}, {block.Y}) flickering to {(newColor == Color.White ? "White" : "Black")}, timeSinceLast: {timeSinceLastFlicker}ms, interval: {block.Interval}ms");
                                 
                                 // Fill the entire 3x3 block with the new color
                                 FillBlock(block.X, block.Y, newColor);
@@ -369,7 +348,6 @@ namespace Flicker
             public int X, Y;
             public int BlockSize;
             public bool IsTextBlock; // True if this block represents text
-            public bool IsSync; // True if synchronized with monitor rate
             public int Interval; // Flicker interval in milliseconds
             public long LastFlicker = 0; // Last flicker time
         }
