@@ -9,11 +9,16 @@ namespace Flicker
 {
     public partial class Form1 : Form
     {
-        Bitmap? backgroundBitmap;
-        List<FlickerPixel> flickerPixels = new();
-        Random rand = new();
-        bool isRunning = false;
-        bool isPaused = false;
+        private Bitmap? displayBitmap;
+        private List<FlickerBlock> flickerBlocks = new();
+        private Random rand = new();
+        private bool isRunning = false;
+        private bool isPaused = false;
+        private int monitorRate = 60; // Default monitor refresh rate
+        private readonly object bitmapLock = new object();
+        private int flickerCount = 0; // Counter for flickering
+        private const int BLOCK_SIZE = 3; // 3x3 pixel blocks
+        private bool globalFlickerState = false; // Global state to ensure alternation
 
         public Form1()
         {
@@ -24,11 +29,11 @@ namespace Flicker
         {
             // Initialize form when it loads
             btnPauseResume.Visible = false;
+            btnCancel.Visible = false;
             btnStart.Visible = true;
-            btnBack.Visible = false;
             
-            // Set default flicker rate (100ms is a good starting point)
-            txtFlickerRate.Text = "100";
+            // Set default monitor rate
+            txtMonitorRate.Text = "60";
         }
 
         private void btnStart_Click(object sender, EventArgs e)
@@ -41,284 +46,298 @@ namespace Flicker
                     return;
                 }
 
-                if (!int.TryParse(txtFlickerRate.Text, out int baseRate) || baseRate < 10 || baseRate > 1000)
+                if (!int.TryParse(txtMonitorRate.Text, out monitorRate) || monitorRate < 30 || monitorRate > 240)
                 {
-                    MessageBox.Show("Please enter a valid flicker rate between 10 and 1000 milliseconds.");
+                    MessageBox.Show("Please enter a valid monitor rate between 30 and 240 Hz.");
                     return;
                 }
 
                 // Stop any existing flickering
-                isRunning = false;
-                System.Threading.Thread.Sleep(100); // Give time for tasks to stop
+                StopFlickering();
 
-                GenerateBackground();
-                GenerateText(txtWord.Text.Trim(), baseRate);
-                pictureBoxDisplay.Image = backgroundBitmap;
+                // Create display bitmap with 3x3 blocks
+                lock (bitmapLock)
+                {
+                    displayBitmap = new Bitmap(pictureBoxDisplay.Width, pictureBoxDisplay.Height);
+                    
+                    // Step 1: Fill entire bitmap with random 3x3 blocks of black or white
+                    FillBitmapWithRandomBlocks();
+                    
+                    // Step 2: Detect word block positions first
+                    DetectWordBlockPositions(txtWord.Text.Trim());
+                    
+                    // Step 3: Fill word blocks with random black or white
+                    FillWordBlocksWithRandomColors();
+                    
+                    // Step 4: Initialize flicker timing
+                    foreach (var block in flickerBlocks)
+                    {
+                        if (block.IsTextBlock)
+                        {
+                            // Initialize the last flicker time with a random offset
+                            block.LastFlicker = Environment.TickCount64 + rand.Next(0, block.Interval);
+                        }
+                    }
+                }
+                
+                pictureBoxDisplay.Image = displayBitmap;
 
-                txtWord.Visible = txtFlickerRate.Visible = btnStart.Visible = false;
-                btnPauseResume.Visible = btnBack.Visible = true;
+                txtWord.Visible = txtMonitorRate.Visible = btnStart.Visible = false;
+                btnPauseResume.Visible = btnCancel.Visible = true;
                 isRunning = true;
                 StartFlickering();
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Error starting flicker: {ex.Message}\n\n{ex.StackTrace}");
+                MessageBox.Show($"Error starting flicker: {ex.Message}");
             }
         }
 
-        private void GenerateBackground()
+        private void FillBitmapWithRandomBlocks()
         {
-            backgroundBitmap = new Bitmap(pictureBoxDisplay.Width, pictureBoxDisplay.Height);
-            // Create a random black and white pattern for the background
-            for (int x = 0; x < backgroundBitmap.Width; x++)
+            // Calculate how many 3x3 blocks fit in the bitmap
+            int blocksX = displayBitmap!.Width / BLOCK_SIZE;
+            int blocksY = displayBitmap.Height / BLOCK_SIZE;
+            
+            for (int blockX = 0; blockX < blocksX; blockX++)
             {
-                for (int y = 0; y < backgroundBitmap.Height; y++)
+                for (int blockY = 0; blockY < blocksY; blockY++)
                 {
-                    // Random black or white pixels
-                    backgroundBitmap.SetPixel(x, y, rand.Next(2) == 0 ? Color.Black : Color.White);
+                    // Random black or white for each 3x3 block
+                    Color randomColor = rand.Next(2) == 0 ? Color.White : Color.Black;
+                    FillBlock(blockX * BLOCK_SIZE, blockY * BLOCK_SIZE, randomColor);
                 }
             }
         }
 
-        private void GenerateText(string text, int baseRate)
+        private void FillBlock(int startX, int startY, Color color)
         {
-            flickerPixels.Clear();
-            
-            // Create a temporary bitmap to detect text pixels
-            using Bitmap wordBmp = new Bitmap(pictureBoxDisplay.Width, pictureBoxDisplay.Height);
-            using Graphics g = Graphics.FromImage(wordBmp);
-            g.Clear(Color.Transparent);
-            g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-            using Font font = new("Arial", 72, FontStyle.Bold);
-            g.DrawString(text, font, Brushes.Black, new PointF(20, pictureBoxDisplay.Height / 2 - 60));
-
-            // Collect all text pixels first
-            List<Point> textPixels = new List<Point>();
-            for (int x = 0; x < wordBmp.Width; x++)
+            // Fill a 3x3 block with the specified color
+            for (int x = 0; x < BLOCK_SIZE; x++)
             {
-                for (int y = 0; y < wordBmp.Height; y++)
+                for (int y = 0; y < BLOCK_SIZE; y++)
                 {
-                    Color px = wordBmp.GetPixel(x, y);
-                    if (px.ToArgb() != Color.Transparent.ToArgb() && px.ToArgb() != Color.White.ToArgb())
+                    int pixelX = startX + x;
+                    int pixelY = startY + y;
+                    
+                    if (pixelX < displayBitmap!.Width && pixelY < displayBitmap.Height)
                     {
-                        textPixels.Add(new Point(x, y));
+                        displayBitmap.SetPixel(pixelX, pixelY, color);
                     }
                 }
             }
-
-            // Create 4x4 pixel blocks instead of individual pixels
-            const int blockSize = 4;
-            Dictionary<Point, bool> textBlocks = new Dictionary<Point, bool>();
-            
-            // Group pixels into 32x32 blocks
-            foreach (Point pixel in textPixels)
-            {
-                Point block = new Point(pixel.X / blockSize, pixel.Y / blockSize);
-                textBlocks[block] = true;
-            }
-
-            // Create rate variations that are hard to detect at 30fps
-            List<int> rateVariations = new List<int>();
-            rateVariations.Add(baseRate);
-            rateVariations.Add(baseRate + 17);
-            rateVariations.Add(baseRate + 23);
-            rateVariations.Add(baseRate + 29);
-            rateVariations.Add(baseRate + 37);
-            rateVariations.Add(baseRate + 41);
-            rateVariations.Add(baseRate + 47);
-            rateVariations.Add(baseRate + 53);
-
-            // Create flicker blocks
-            foreach (Point block in textBlocks.Keys)
-            {
-                int flickerRate = rateVariations[rand.Next(rateVariations.Count)];
-                flickerRate = Math.Max(flickerRate, 10); // Ensure minimum rate
-                
-                flickerPixels.Add(new FlickerPixel { 
-                    X = block.X * blockSize, 
-                    Y = block.Y * blockSize, 
-                    Interval = flickerRate, 
-                    IsTextPixel = true,
-                    BlockSize = blockSize 
-                });
-            }
-            
-            // Debug: Show how many blocks were created
-            MessageBox.Show($"Found {textPixels.Count} text pixels, created {flickerPixels.Count} 4x4 blocks for flickering.");
         }
 
-        private async void StartFlickering()
+        private void DetectWordBlockPositions(string text)
+        {
+            flickerBlocks.Clear();
+            
+            // Create a temporary bitmap to detect where the word would be
+            using (Bitmap tempBitmap = new Bitmap(displayBitmap!.Width, displayBitmap.Height))
+            using (Graphics g = Graphics.FromImage(tempBitmap))
+            {
+                g.Clear(Color.Black); // Black background
+                
+                // Draw the word in white on the temporary bitmap
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
+                using Font font = new("Arial", 72, FontStyle.Bold);
+                g.DrawString(text, font, Brushes.White, new PointF(20, tempBitmap.Height / 2 - 60));
+                
+                // Detect white pixels (the word we drew)
+                List<Point> wordPixels = new List<Point>();
+                for (int x = 0; x < tempBitmap.Width; x++)
+                {
+                    for (int y = 0; y < tempBitmap.Height; y++)
+                    {
+                        Color px = tempBitmap.GetPixel(x, y);
+                        // Look for white pixels (the word we drew)
+                        if (px.R > 200 && px.G > 200 && px.B > 200)
+                        {
+                            wordPixels.Add(new Point(x, y));
+                        }
+                    }
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Found {wordPixels.Count} word pixels");
+
+                // If no white pixels found, try more lenient detection
+                if (wordPixels.Count == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("No white pixels found, trying lenient detection...");
+                    for (int x = 0; x < tempBitmap.Width; x++)
+                    {
+                        for (int y = 0; y < tempBitmap.Height; y++)
+                        {
+                            Color px = tempBitmap.GetPixel(x, y);
+                            // More lenient detection: any pixel that's not black
+                            if (px.R > 50 || px.G > 50 || px.B > 50)
+                            {
+                                wordPixels.Add(new Point(x, y));
+                            }
+                        }
+                    }
+                    System.Diagnostics.Debug.WriteLine($"Found {wordPixels.Count} word pixels with lenient detection");
+                }
+
+                // Group pixels into 3x3 blocks
+                Dictionary<Point, bool> wordBlocks = new Dictionary<Point, bool>();
+                
+                foreach (Point pixel in wordPixels)
+                {
+                    Point block = new Point(pixel.X / BLOCK_SIZE, pixel.Y / BLOCK_SIZE);
+                    wordBlocks[block] = true;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"Created {wordBlocks.Count} word blocks");
+
+                // Create flicker blocks for the word
+                bool useSyncRate = true;
+                foreach (Point block in wordBlocks.Keys)
+                {
+                    flickerBlocks.Add(new FlickerBlock
+                    {
+                        X = block.X * BLOCK_SIZE,
+                        Y = block.Y * BLOCK_SIZE,
+                        BlockSize = BLOCK_SIZE,
+                        IsTextBlock = true,
+                        IsSync = useSyncRate,
+                        Interval = useSyncRate ? 200 : 300 // Sync: 200ms, Async: 300ms
+                    });
+                    
+                    useSyncRate = !useSyncRate; // Alternate between sync and async
+                }
+                
+                MessageBox.Show($"Found {wordPixels.Count} word pixels, created {flickerBlocks.Count} {BLOCK_SIZE}x{BLOCK_SIZE} blocks.\nTimer interval: {1000 / monitorRate}ms\nText: '{text}'");
+            }
+        }
+
+        private void FillWordBlocksWithRandomColors()
+        {
+            // Fill each word block with random black or white
+            foreach (var block in flickerBlocks)
+            {
+                if (block.IsTextBlock)
+                {
+                    // Random color for each text block
+                    Color randomColor = rand.Next(2) == 0 ? Color.White : Color.Black;
+                    FillBlock(block.X, block.Y, randomColor);
+                    
+                    // Debug: Log the initial color assignment
+                    System.Diagnostics.Debug.WriteLine($"Word block at ({block.X}, {block.Y}) initialized with {(randomColor == Color.White ? "White" : "Black")}");
+                }
+            }
+            
+            System.Diagnostics.Debug.WriteLine($"Initialized {flickerBlocks.Count} word blocks with random colors");
+        }
+
+        private void StartFlickering()
         {
             try
             {
-                // Create a working bitmap for modifications and a display bitmap for the UI
-                workingBitmap = (Bitmap)backgroundBitmap!.Clone();
-                displayBitmap = (Bitmap)backgroundBitmap.Clone();
+                // Use the designer-created timer1
+                int timerInterval = 50; // Use 50ms for more responsive flickering
+                timer1.Interval = timerInterval;
+                timer1.Start();
                 
-                // Overlay the word on both bitmaps
-                using (Graphics g = Graphics.FromImage(workingBitmap))
-                {
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-                    using Font font = new("Arial", 72, FontStyle.Bold);
-                    g.DrawString(txtWord.Text.Trim(), font, Brushes.Black, new PointF(20, pictureBoxDisplay.Height / 2 - 60));
-                }
-                
-                using (Graphics g = Graphics.FromImage(displayBitmap))
-                {
-                    g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
-                    using Font font = new("Arial", 72, FontStyle.Bold);
-                    g.DrawString(txtWord.Text.Trim(), font, Brushes.Black, new PointF(20, pictureBoxDisplay.Height / 2 - 60));
-                }
-                
-                pictureBoxDisplay.Image = displayBitmap;
-                
-                // Use a timer-based approach
-                var flickerTimer = new System.Threading.Timer(FlickerCallback, null, 0, 16); // 60fps
-                
-                // Keep running until stopped
-                while (isRunning)
-                {
-                    await Task.Delay(100);
-                }
-                
-                // Clean up
-                flickerTimer.Dispose();
-                workingBitmap?.Dispose();
+                System.Diagnostics.Debug.WriteLine($"StartFlickering: Timer started with interval {timerInterval}ms, monitorRate: {monitorRate}");
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error in StartFlickering: {ex.Message}");
+            }
+        }
+
+        private void StopFlickering()
+        {
+            isRunning = false;
+            timer1.Stop();
+            
+            // Clean up bitmaps
+            lock (bitmapLock)
+            {
                 displayBitmap?.Dispose();
-                workingBitmap = null;
                 displayBitmap = null;
             }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error in StartFlickering: {ex.Message}\n\n{ex.StackTrace}");
-            }
+            
+
         }
-        
-        private Bitmap? workingBitmap = null;
-        private Bitmap? displayBitmap = null;
-        private Dictionary<FlickerPixel, int> flickerStates = new Dictionary<FlickerPixel, int>();
-        
-        private void FlickerCallback(object? state)
+
+        private void timer1_Tick(object sender, EventArgs e)
         {
             try
             {
-                if (!isRunning || isPaused || workingBitmap == null || displayBitmap == null) return;
+                System.Diagnostics.Debug.WriteLine($"timer1_Tick called - isRunning: {isRunning}, isPaused: {isPaused}");
                 
-                // Get current time for timing calculations
-                long currentTime = Environment.TickCount64;
+                if (!isRunning || isPaused) return;
                 
-                // Only modify text blocks in the working bitmap based on their individual timing
-                foreach (var px in flickerPixels)
+                lock (bitmapLock)
                 {
-                    if (px.IsTextPixel)
+                    if (displayBitmap == null) 
                     {
-                        // Check if it's time for this block to flicker based on its interval
-                        if (!flickerStates.ContainsKey(px))
+                        System.Diagnostics.Debug.WriteLine("timer1_Tick: Bitmap is null");
+                        return;
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"timer1_Tick: Processing {flickerBlocks.Count} blocks");
+                    
+                    // Use a counter to alternate colors
+                    flickerCount++;
+                    
+                    // Toggle global flicker state every few ticks to ensure alternation
+                    if (flickerCount % 5 == 0)
+                    {
+                        globalFlickerState = !globalFlickerState;
+                        System.Diagnostics.Debug.WriteLine($"Global flicker state changed to: {(globalFlickerState ? "White" : "Black")}");
+                    }
+                    
+                    // Only flicker the text blocks, leave the background blocks alone
+                    long currentTime = Environment.TickCount64;
+                    int blocksUpdated = 0;
+                    
+                    foreach (var block in flickerBlocks)
+                    {
+                        if (block.IsTextBlock)
                         {
-                            flickerStates[px] = 0;
-                        }
-                        
-                        // Calculate if this block should flicker now
-                        long timeSinceLastFlicker = currentTime - flickerStates[px];
-                        if (timeSinceLastFlicker >= px.Interval)
-                        {
-                            // Toggle the flicker state for this block
-                            flickerStates[px] = (int)currentTime;
-                            
-                            // Get the current color of this block and flip it
-                            Color currentColor = workingBitmap.GetPixel(px.X, px.Y);
-                            Color flickerColor = (currentColor == Color.Black) ? Color.White : Color.Black;
-                            
-                            // Fill the entire 4x4 block with the flicker color
-                            for (int bx = 0; bx < px.BlockSize; bx++)
+                            // Check if it's time for this block to flicker
+                            long timeSinceLastFlicker = currentTime - block.LastFlicker;
+                            if (timeSinceLastFlicker >= block.Interval)
                             {
-                                for (int by = 0; by < px.BlockSize; by++)
+                                // Use global flicker state to determine color
+                                Color newColor = globalFlickerState ? Color.White : Color.Black;
+                                
+                                System.Diagnostics.Debug.WriteLine($"Block at ({block.X}, {block.Y}) flickering to {(globalFlickerState ? "White" : "Black")}, timeSinceLast: {timeSinceLastFlicker}ms, interval: {block.Interval}ms");
+                                
+                                // Fill the entire 3x3 block with the new color
+                                FillBlock(block.X, block.Y, newColor);
+                                
+                                // Update last flicker time
+                                block.LastFlicker = currentTime;
+                                blocksUpdated++;
+                            }
+                            else
+                            {
+                                // Debug: Show blocks that aren't ready to flicker yet
+                                if (flickerCount % 10 == 0) // Only log every 10th tick to avoid spam
                                 {
-                                    int pixelX = px.X + bx;
-                                    int pixelY = px.Y + by;
-                                    
-                                    // Make sure we don't go outside the bitmap bounds
-                                    if (pixelX < workingBitmap.Width && pixelY < workingBitmap.Height)
-                                    {
-                                        workingBitmap.SetPixel(pixelX, pixelY, flickerColor);
-                                    }
+                                    System.Diagnostics.Debug.WriteLine($"Block at ({block.X}, {block.Y}) not ready: timeSinceLast={timeSinceLastFlicker}ms, interval={block.Interval}ms");
                                 }
                             }
                         }
                     }
+                    
+                    // Debug output
+                    System.Diagnostics.Debug.WriteLine($"timer1_Tick: Updated {blocksUpdated} blocks at count {flickerCount}");
                 }
                 
-                // Copy only the modified text blocks to display bitmap on UI thread
-                if (pictureBoxDisplay.InvokeRequired)
-                {
-                    pictureBoxDisplay.BeginInvoke(() => {
-                        try
-                        {
-                            // Copy only the text blocks that were modified
-                            foreach (var px in flickerPixels)
-                            {
-                                if (px.IsTextPixel)
-                                {
-                                    // Copy the 4x4 block from working to display bitmap
-                                    for (int bx = 0; bx < px.BlockSize; bx++)
-                                    {
-                                        for (int by = 0; by < px.BlockSize; by++)
-                                        {
-                                            int pixelX = px.X + bx;
-                                            int pixelY = px.Y + by;
-                                            
-                                            if (pixelX < workingBitmap.Width && pixelY < workingBitmap.Height &&
-                                                pixelX < displayBitmap.Width && pixelY < displayBitmap.Height)
-                                            {
-                                                displayBitmap.SetPixel(pixelX, pixelY, workingBitmap.GetPixel(pixelX, pixelY));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            pictureBoxDisplay.Invalidate();
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"UI update error: {ex.Message}");
-                        }
-                    });
-                }
-                else
-                {
-                    // Copy only the text blocks that were modified
-                    foreach (var px in flickerPixels)
-                    {
-                        if (px.IsTextPixel)
-                        {
-                            // Copy the 4x4 block from working to display bitmap
-                            for (int bx = 0; bx < px.BlockSize; bx++)
-                            {
-                                for (int by = 0; by < px.BlockSize; by++)
-                                {
-                                    int pixelX = px.X + bx;
-                                    int pixelY = px.Y + by;
-                                    
-                                    if (pixelX < workingBitmap.Width && pixelY < workingBitmap.Height &&
-                                        pixelX < displayBitmap.Width && pixelY < displayBitmap.Height)
-                                    {
-                                        displayBitmap.SetPixel(pixelX, pixelY, workingBitmap.GetPixel(pixelX, pixelY));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    pictureBoxDisplay.Invalidate();
-                }
+                // Update the display
+                pictureBoxDisplay.Refresh(); // Use Refresh instead of Invalidate for immediate update
+                System.Diagnostics.Debug.WriteLine("timer1_Tick: Refreshed pictureBox");
             }
             catch (Exception ex)
             {
-                // Log error but don't crash
-                System.Diagnostics.Debug.WriteLine($"FlickerCallback error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"timer1_Tick error: {ex.Message}");
             }
         }
-
-
 
         private void btnPauseResume_Click(object sender, EventArgs e)
         {
@@ -326,29 +345,33 @@ namespace Flicker
             btnPauseResume.Text = isPaused ? "Resume" : "Pause";
         }
 
-        private void btnBack_Click(object sender, EventArgs e)
+        private void btnCancel_Click(object sender, EventArgs e)
         {
             // Stop flickering
-            isRunning = false;
-            System.Threading.Thread.Sleep(100); // Give time for tasks to stop
+            StopFlickering();
             
             // Reset UI
-            btnPauseResume.Visible = btnBack.Visible = false;
-            txtWord.Visible = txtFlickerRate.Visible = btnStart.Visible = true;
+            btnPauseResume.Visible = btnCancel.Visible = false;
+            txtWord.Visible = txtMonitorRate.Visible = btnStart.Visible = true;
             pictureBoxDisplay.Image = null;
             
             // Clear resources
-            backgroundBitmap?.Dispose();
-            backgroundBitmap = null;
-            flickerPixels.Clear();
+            lock (bitmapLock)
+            {
+                displayBitmap?.Dispose();
+                displayBitmap = null;
+            }
+            flickerBlocks.Clear();
         }
 
-        private class FlickerPixel
+        private class FlickerBlock
         {
             public int X, Y;
-            public int Interval;
-            public bool IsTextPixel; // Track if this is a text pixel
-            public int BlockSize; // Size of the block (32x32)
+            public int BlockSize;
+            public bool IsTextBlock; // True if this block represents text
+            public bool IsSync; // True if synchronized with monitor rate
+            public int Interval; // Flicker interval in milliseconds
+            public long LastFlicker = 0; // Last flicker time
         }
     }
 }
